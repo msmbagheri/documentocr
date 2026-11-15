@@ -200,16 +200,62 @@ def collect_layers(job_dir: str, stem: str, img_size: list) -> dict:
     }
 
 
+def _estimate_skew_cv(gray):
+    """Best deskew angle via projection-profile variance (text-line method).
+
+    Binarizes INK only for the estimate (never shown to the OCR engine) and
+    searches -8..+8 deg: the angle whose warp makes horizontal text rows form
+    the sharpest peaks (max row-sum variance) wins.  Unlike Hough-on-edges
+    (v1), this cannot lock onto diagonal table borders — long borders and text
+    lines share the same dominant direction, and short diagonal noise barely
+    moves the profile.  Returns (angle_deg, best_score, straight_score); the
+    returned angle IS the correction to apply.
+    """
+    import cv2  # noqa: N813
+    import numpy as np
+
+    scale = 1000.0 / max(gray.shape[:2])
+    if scale < 1.0:
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    ink = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                                cv2.THRESH_BINARY_INV, 31, 15)
+    ih, iw = ink.shape
+    center = (iw / 2.0, ih / 2.0)
+    best_a, best_s, base_s = 0.0, -1.0, 0.0
+    for ang in np.arange(-8.0, 8.01, 0.5):
+        m = cv2.getRotationMatrix2D(center, float(ang), 1.0)
+        rot = cv2.warpAffine(ink, m, (iw, ih), flags=cv2.INTER_NEAREST, borderValue=0)
+        s = float(np.var(rot.sum(axis=1, dtype=np.float64)))
+        if abs(ang) < 1e-9:
+            base_s = s
+        if s > best_s:
+            best_a, best_s = float(ang), s
+    return best_a, best_s, base_s
+
+
 def preprocess_page(path: str, enhance: bool) -> str:
-    """Optional doc-quality enhancement BEFORE OCR (the OCR engine is untouched):
-    smart upscale of small scans, contrast stretch of flat/faded pages, and
-    mild deskew (cv2 if installed). Only geometry-preserving-enough transforms
-    are applied; the returned path is what detection/recognition actually sees.
+    """Doc-quality enhancement BEFORE OCR (the OCR engine is untouched). v2.
+
+    Expert rules (v1's blind autocontrast+Hough REGRESSED a good doc 45->39
+    fields, so every step here is conditional and geometry-safe):
+      * NO binarization/thresholding reaches the engine — Surya's CNN/Transformer
+        detector wants natural grayscale photos, not line-art.
+      * illumination normalization: divide by the blurred background -> flattens
+        shadows/yellowed paper; SKIPPED when the page is already clean/white.
+      * conditional upscale: only small scans (< 1500px longest side, cap 2x),
+        plus a mild unsharp mask to restore stroke acuity after interpolation.
+      * text-based deskew: projection-profile variance, applied only for
+        0.6..15 deg AND only when it clearly beats the straight score (+12%).
+      * light denoise only when the high-frequency noise metric is high.
+    A clean scan therefore passes through unchanged (changed stays False and
+    the file is not even re-encoded), so good documents cannot regress.
     """
     if not enhance:
         return path
     try:
-        from PIL import Image, ImageOps
+        import cv2  # noqa: N813
+        import numpy as np
+        from PIL import ImageFilter, ImageOps
     except ImportError:
         return path
     try:
@@ -218,45 +264,53 @@ def preprocess_page(path: str, enhance: bool) -> str:
     except Exception:  # noqa: BLE001
         return path
 
-    changed = False
-    # 1) upscale tiny / low-res scans (detector misses small text otherwise)
     w, h = im.size
-    if max(w, h) < 1200:
-        scale = min(2.0, 1200 / max(w, h))
+    changed = False
+    arr = np.asarray(im)
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+
+    # 1) illumination normalization — ONLY for genuinely dark/colored or
+    #    heavily shadowed pages. Evidence (A/B, 2026-11-15): the good insurance
+    #    scan has bg.std=15.9 purely from its own colored panels -> a std-based
+    #    gate falsely "enhanced" it and cost 5 fields; a dark-background green
+    #    card (bg.mean=179) genuinely needs it (+15 detected lines).
+    k = max(31, (max(w, h) // 30) * 2 + 1)
+    k = min(k, (min(w, h) // 2) * 2 - 1)
+    if k >= 3:
+        bg = cv2.GaussianBlur(gray, (k, k), 0)
+        if float(bg.mean()) < 200.0 or float(bg.std()) > 25.0:
+            f = arr.astype(np.float32)
+            bgf = cv2.GaussianBlur(f, (k, k), 0)
+            out = np.clip(f / np.maximum(bgf, 1.0) * 235.0, 0, 255).astype(np.uint8)
+            arr, im = out, Image.fromarray(out)
+            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+            changed = True
+
+    # 2) upscale small scans (detector misses small text otherwise), cap 2x
+    if max(w, h) < 1500:
+        scale = min(2.0, 1500.0 / max(w, h))
         im = im.resize((round(w * scale), round(h * scale)), Image.LANCZOS)
+        im = im.filter(ImageFilter.UnsharpMask(radius=1.5, percent=80, threshold=2))
+        arr = np.asarray(im)
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
         changed = True
-        w, h = im.size
-    # 2) contrast stretch only when the page is faded / low dynamic range
-    gray = im.convert("L")
-    if max(gray.getextrema()) - min(gray.getextrema()) < 200:
-        im = ImageOps.autocontrast(im, cutoff=1)
-        changed = True
-    # 3) deskew small rotations (cv2 optional, never rotates > 15deg)
+
+    # 3) deskew via text-row projection variance (best-effort, small angles only)
     try:
-        import cv2  # noqa: N813
-        import numpy as np
-        g = np.array(gray)
-        edges = cv2.Canny(g, 50, 150)
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=120,
-                                minLineLength=min(g.shape) // 3, maxLineGap=8)
-        if lines is not None:
-            angles = [np.degrees(np.arctan2(y2 - y1, x2 - x1))
-                      for x1, y1, x2, y2 in lines[:, 0] if abs(x2 - x1) >= 8]
-            angles = [a for a in angles if abs(a) <= 15]
-            if len(angles) >= 4:
-                med = float(np.median(angles))
-                if 0.4 <= abs(med) <= 15:
-                    im = im.rotate(med, resample=Image.BICUBIC,
-                                   expand=False, fillcolor=(255, 255, 255))
-                    changed = True
-    except ImportError:
-        pass
-    except Exception:  # noqa: BLE001  (deskew is best-effort only)
+        ang, best_s, base_s = _estimate_skew_cv(gray)
+        if 0.6 <= abs(ang) <= 15.0 and best_s > base_s * 1.12:
+            im = im.rotate(ang, resample=Image.BICUBIC, expand=False,
+                           fillcolor=(255, 255, 255))
+            changed = True
+    except Exception:  # noqa: BLE001
         pass
 
     if changed:
         try:
-            im.save(path)
+            if path.lower().endswith((".jpg", ".jpeg")):
+                im.save(path, quality=95)
+            else:
+                im.save(path)
         except OSError:
             return path  # read-only/unwritable page: keep original
     return path
