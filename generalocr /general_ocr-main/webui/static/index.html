@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>DocumentOCR — استخراج هوشمند متن و اطلاعات از اسناد</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Cpath d='M10 8h9l5 5v11a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z' fill='white'/%3E%3Cpath d='M13 17h8M13 21h6' stroke='%232563eb' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<a class="skip-link" href="#main">رفتن به محتوای اصلی</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="28" height="28" fill="none">
+          <rect width="32" height="32" rx="9" fill="currentColor"/>
+          <path d="M10.5 8.5h7.5l4.5 4.5v9.5a2 2 0 0 1-2 2h-10a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" fill="#fff"/>
+          <path d="M13.5 17.5h6M13.5 21h4.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="brand__text">
+        <span class="brand__name">DocumentOCR</span>
+        <span class="brand__tag">استخراج هوشمند متن و اطلاعات از اسناد</span>
+      </span>
+    </div>
+
+    <div class="statuses" role="status" aria-live="polite">
+      <span class="status" id="engine-status" data-state="checking">
+        <span class="status__dot" aria-hidden="true"></span>
+        <span class="status__label">سرویس OCR</span>
+        <span class="status__value" id="engine-value">در حال بررسی…</span>
+      </span>
+      <span class="status" id="job-status" data-state="idle">
+        <span class="status__dot" aria-hidden="true"></span>
+        <span class="status__label">وضعیت پردازش</span>
+        <span class="status__value" id="job-value">آماده به کار</span>
+      </span>
+    </div>
+  </div>
+</header>
+
+<main class="page" id="main">
+
+  <div class="workspace">
+
+    <!-- ستون راست: بارگذاری و کنترل عملیات -->
+    <section class="column" aria-labelledby="upload-title">
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title" id="upload-title">بارگذاری سند</h2>
+          <span class="chip" id="formats-chip">—</span>
+        </div>
+        <div class="card__body">
+
+          <div class="dropzone" id="dropzone" tabindex="0" role="button"
+               aria-labelledby="drop-title" aria-describedby="drop-meta">
+            <input type="file" id="file-input" class="visually-hidden" aria-label="انتخاب فایل سند">
+            <span class="dropzone__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/>
+                <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+              </svg>
+            </span>
+            <p class="dropzone__title" id="drop-title">تصویر سند را اینجا رها کنید</p>
+            <p class="dropzone__sub">یا برای انتخاب از کامپیوتر کلیک کنید</p>
+            <p class="dropzone__meta" id="drop-meta">در حال خواندن تنظیمات…</p>
+          </div>
+
+          <div class="file-card" id="file-card" hidden>
+            <span class="file-card__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/>
+                <path d="M14 3v5h5"/>
+              </svg>
+            </span>
+            <span class="file-card__text">
+              <span class="file-card__name" id="file-name" dir="auto"></span>
+              <span class="file-card__meta" id="file-meta"></span>
+            </span>
+            <button type="button" class="icon-btn" id="remove-file" aria-label="حذف فایل انتخاب‌شده" title="حذف فایل">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                <path d="M6 6l12 12M18 6L6 18"/>
+              </svg>
+            </button>
+          </div>
+
+          <div class="alert" id="error-box" role="alert" hidden>
+            <span class="alert__icon" aria-hidden="true">!</span>
+            <div class="alert__body">
+              <p class="alert__title" id="error-title"></p>
+              <p class="alert__hint" id="error-hint" hidden></p>
+            </div>
+            <button type="button" class="icon-btn icon-btn--sm" id="dismiss-error" aria-label="بستن پیام خطا">×</button>
+          </div>
+
+          <label class="bb-toggle" id="enhance-wrap" title="بهبود کیفیت سند قبل از OCR: بزرگ‌نمایی هوشمند، بهبود کنتراست و صاف‌کردن کجی">
+            <input type="checkbox" id="enhance-toggle">
+            <span class="bb-swatch" aria-hidden="true"></span>
+            پیش‌پردازش سند (برای اسکن‌های کم‌کیفیت)
+          </label>
+
+          <button type="button" class="btn btn--primary btn--block" id="run-btn" disabled>
+            <span class="spinner" id="run-spinner" aria-hidden="true" hidden></span>
+            <span id="run-label">شروع OCR</span>
+          </button>
+
+          <p class="form-note">
+            متن و خروجی JSON پس از پردازش در همین صفحه نمایش داده می‌شود.
+          </p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <h2 class="card__title">نتایج ذخیره‌شده</h2>
+          <span class="chip chip--soft" id="saved-count">۰</span>
+        </div>
+        <div class="card__body">
+          <div class="saved-list" id="saved-list" aria-label="فهرست نتایج ذخیره‌شده"></div>
+          <p class="saved-empty" id="saved-empty">هنوز نتیجه‌ای ذخیره نشده است. پس از OCR، با «ذخیره نتیجه» آن را نگه دارید.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ستون چپ: پیش‌نمایش سند -->
+    <section class="column" aria-labelledby="preview-title">
+      <div class="card card--preview">
+        <div class="card__head">
+          <h2 class="card__title" id="preview-title">پیش‌نمایش سند</h2>
+          <div class="zoom" id="zoom-controls" hidden>
+            <button type="button" class="icon-btn icon-btn--sm" id="zoom-out" aria-label="کوچک‌نمایی">−</button>
+            <span class="zoom__label" id="zoom-label">۱۰۰٪</span>
+            <button type="button" class="icon-btn icon-btn--sm" id="zoom-in" aria-label="بزرگ‌نمایی">+</button>
+            <button type="button" class="btn btn--ghost btn--xs" id="zoom-fit">تناسب</button>
+          </div>
+        </div>
+        <div class="card__body card__body--preview">
+          <div class="preview-stage" id="preview-stage">
+            <div class="preview-canvas" id="preview-canvas">
+              <div class="placeholder" id="preview-placeholder">
+                <span class="placeholder__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="4" width="18" height="16" rx="2"/>
+                    <circle cx="8.5" cy="9.5" r="1.5"/>
+                    <path d="m4 17 4.5-4.5a2 2 0 0 1 2.8 0L16 17"/>
+                  </svg>
+                </span>
+                <p class="placeholder__title">هنوز سندی انتخاب نشده است</p>
+                <p class="placeholder__sub">برای مشاهده پیش‌نمایش، یک تصویر یا PDF بارگذاری کنید.</p>
+              </div>
+              <img class="preview-img" id="preview-img" alt="پیش‌نمایش سند انتخاب‌شده" hidden>
+              <iframe class="preview-pdf" id="preview-pdf" title="پیش‌نمایش فایل PDF" hidden></iframe>
+            </div>
+          </div>
+          <div class="page-tabs" id="page-tabs" hidden aria-label="انتخاب صفحه سند"></div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- نتیجه OCR -->
+  <section class="result" id="result" aria-labelledby="result-title" hidden>
+
+    <div class="result__head">
+      <div class="result__title-wrap">
+        <h2 class="result__title" id="result-title">نتیجه OCR</h2>
+        <span class="badge badge--ok" id="result-badge">پردازش با موفقیت انجام شد</span>
+      </div>
+      <div class="result__actions">
+        <button type="button" class="btn btn--ghost btn--sm" id="save-result" disabled>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/>
+            <path d="M17 21v-8H7v8M7 3v5h8"/>
+          </svg>
+          ذخیره نتیجه
+        </button>
+        <button type="button" class="btn btn--ghost btn--sm" id="copy-text">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 5H6a1 1 0 0 0-1 1v9"/>
+          </svg>
+          کپی متن
+        </button>
+        <button type="button" class="btn btn--ghost btn--sm" id="download-txt">دانلود TXT</button>
+        <button type="button" class="btn btn--ghost btn--sm" id="download-original">دانلود فایل اصلی</button>
+      </div>
+    </div>
+
+    <div class="card card--viewer">
+      <div class="card__head">
+        <h3 class="card__title">بررسی بصری کادرها</h3>
+        <div class="bb-controls" id="bb-controls">
+          <label class="bb-toggle bb-toggle--blocks"><input type="checkbox" id="bb-show-blocks" checked><span class="bb-swatch bb-swatch--blocks" aria-hidden="true"></span>بلوک‌های OCR</label>
+          <label class="bb-toggle bb-toggle--lines" id="bb-lines-wrap" hidden><input type="checkbox" id="bb-show-lines" checked><span class="bb-swatch bb-swatch--lines" aria-hidden="true"></span>خطوط Detection</label>
+          <label class="bb-toggle" id="bb-nums-wrap" hidden><input type="checkbox" id="bb-show-nums" checked>شماره‌ها</label>
+          <div class="zoom">
+            <button type="button" class="icon-btn icon-btn--sm" id="bb-zoom-out" aria-label="کوچک‌نمایی">−</button>
+            <span class="zoom__label" id="bb-zoom-label">۱۰۰٪</span>
+            <button type="button" class="icon-btn icon-btn--sm" id="bb-zoom-in" aria-label="بزرگ‌نمایی">+</button>
+            <button type="button" class="btn btn--ghost btn--xs" id="bb-zoom-fit">تناسب</button>
+          </div>
+        </div>
+      </div>
+      <div class="bb-warning" id="bb-warning" role="alert" hidden></div>
+      <div class="card__body card__body--viewer">
+        <div class="bb-grid">
+          <div class="bb-stage-col">
+            <div class="preview-stage bb-stage" id="bb-stage">
+              <div class="preview-canvas" id="bb-canvas">
+                <div class="bb-frame" id="bb-frame" hidden>
+                  <img class="bb-img" id="bb-img" alt="تصویر سند همراه کادرهای تشخیص‌داده‌شده" draggable="false">
+                  <svg class="bb-svg" id="bb-svg" aria-label="لایه کادرهای OCR"></svg>
+                </div>
+                <div class="placeholder" id="bb-placeholder">
+                  <span class="placeholder__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 15l4-4 3.5 3.5L15 11l5 5"/><circle cx="9" cy="9" r="1.3"/></svg>
+                  </span>
+                  <p class="placeholder__title">پس از اجرای OCR، کادرهای تشخیص‌داده‌شده اینجا نمایش داده می‌شوند</p>
+                </div>
+              </div>
+            </div>
+            <p class="bb-hint">روی کادر کلیک کنید تا متن و اطلاعات همان بلوک نمایش داده شود؛ در حالت زوم، تصویر را بکشید.</p>
+          </div>
+          <aside class="bb-side" aria-label="فهرست بلوک‌های OCR">
+            <div class="bb-side__head">
+              <span class="chip chip--soft" id="bb-count">—</span>
+              <button type="button" class="btn btn--ghost btn--xs" id="bb-copy-text" disabled>کپی متن بلوک</button>
+            </div>
+            <div class="bb-info" id="bb-info" hidden>
+              <div class="bb-info__meta">
+                <span class="bb-badge" id="bb-info-label"></span>
+                <span class="bb-info__kv" id="bb-info-order"></span>
+                <span class="bb-info__kv" id="bb-info-conf"></span>
+              </div>
+              <p class="bb-info__text" id="bb-info-text" dir="auto"></p>
+              <p class="bb-info__bbox" id="bb-info-bbox" dir="ltr"></p>
+            </div>
+            <div class="bb-list" id="bb-list" role="listbox" aria-label="بلوک‌های استخراج‌شده"></div>
+          </aside>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card__head">
+        <h3 class="card__title">متن استخراج‌شده</h3>
+        <span class="chip chip--soft" id="text-meta"></span>
+      </div>
+      <div class="card__body">
+        <div class="ocr-text" id="ocr-text" dir="rtl"></div>
+      </div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="card">
+      <div class="card__head">
+        <h3 class="card__title">خروجی JSON</h3>
+        <div class="head-actions">
+          <button type="button" class="btn btn--ghost btn--xs" id="copy-json">کپی JSON</button>
+          <button type="button" class="btn btn--ghost btn--xs" id="download-json">دانلود JSON</button>
+        </div>
+      </div>
+      <div class="card__body">
+        <pre class="json-view" id="json-view" dir="ltr" tabindex="0" aria-label="خروجی JSON موتور OCR"><code id="json-code"></code></pre>
+      </div>
+    </div>
+
+  </section>
+
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

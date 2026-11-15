@@ -1,0 +1,7 @@
+archive/
+.vscode
+__pycache__/
+books/
+results/
+data/
+output/

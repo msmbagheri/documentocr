@@ -1,0 +1,6 @@
+pillow
+matplotlib
+pydantic-settings
+python-dotenv
+loguru
+pdf2image

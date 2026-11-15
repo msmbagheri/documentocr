@@ -1,0 +1,28 @@
+# DocumentOCR — git ignore
+
+# Python / env
+.venv*/
+venv*/
+__pycache__/
+*.py[cod]
+
+# Processed / large unrelated project folders
+datasets/
+datasets
+PTDR/
+experiments/parisa_benchmark/
+bench/aggregate_easyocr.py
+bench/easyocr_results.jsonl
+bench/run_easyocr.py
+output_konkour/
+evaluation/
+fonts/
+
+# Web UI runtime (results have their own dated backups)
+generalocr /general_ocr-main/webui/saved/
+generalocr /general_ocr-main/.webui_tmp/
+generalocr /general_ocr-main/webui/tests/data/ocr-data/
+
+# OS / temp
+.DS_Store
+Thumbs.db

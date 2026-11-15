@@ -1,0 +1,6 @@
+loguru
+paddleocr
+surya-ocr
+matplotlib
+pydantic_settings
+pdf2image
