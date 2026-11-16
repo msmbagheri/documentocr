@@ -103,6 +103,14 @@
             پیش‌پردازش سند (برای اسکن‌های کم‌کیفیت)
           </label>
 
+          <label class="bb-toggle" id="docprep-wrap" title="پردازش سند با پکیج document-preprocessor (vendor): «عمومی» فقط تصحیح پرسپکتیو+DPI — تست‌شده برای Surya؛ «کامل» کل پایپلاین (باینری‌سازی Otsu/Adaptive و…) که برای Tesseract ساخته شده و ممکن است Surya را پس‌ببرد">
+            <select id="docprep-toggle">
+              <option value="">پردازش اضافه: خاموش</option>
+              <option value="geometry">پردازش اضافه: فقط هندسه (توصیه)</option>
+              <option value="full">پردازش اضافه: کامل (Otsu/Adaptive)</option>
+            </select>
+          </label>
+
           <label class="bb-toggle" id="refine-wrap" title="اصلاح خطاهای حروف فارسی با مدل رایگان (Ernie flash از OpenRouter) — اعداد هرگز تغییر نمی‌کنند">
             <input type="checkbox" id="refine-toggle">
             <span class="bb-swatch" aria-hidden="true"></span>

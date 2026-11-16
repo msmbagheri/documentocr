@@ -234,6 +234,63 @@ def _estimate_skew_cv(gray):
     return best_a, best_s, base_s
 
 
+def docprep_page(path: str, mode: str) -> str:
+    """EXPERIMENTAL opt-in: run the vendored ``document-preprocessor`` package
+    BEFORE OCR. Two modes (both atomic: write to a temp file, swap on success):
+
+      * "geometry" (RECOMMENDED) — only the package's geometry-safe steps:
+        EXIF fix + quadrilateral perspective warp + DPI-aware downscale.
+        NO contrast/denoise/binarize/sharpen (those are tuned for Tesseract
+        and REGRESS Surya — see A/B, 2026-11-16: full pipeline dropped
+        insurance fields 5/5 -> 0/5, contrast+denoise 5/5 -> 1/5).
+      * "full" — the package's complete pipeline (perspective + contrast +
+        denoise + Otsu/adaptive binarize + sharpen + DPI), exactly as the
+        vendor ships it. Offered for the user's own A/B; expected to hurt
+        Surya on flat scans.
+
+    Falls back to the original path on ANY error (never breaks the job).
+    """
+    if mode not in ("geometry", "full"):
+        return path
+    try:
+        import sys as _sys
+        _docprep_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_docprep")
+        if _docprep_dir not in _sys.path:
+            _sys.path.insert(0, _docprep_dir)
+        from document_preprocessor import DocumentPreprocessor, PreprocessorConfig  # noqa: N812
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"docprep unavailable ({exc}) — using original")
+        return path
+    try:
+        from PIL import ImageOps  # noqa: N812
+        config = PreprocessorConfig.from_profile_and_env()
+        dp = DocumentPreprocessor(config=config)
+        im = Image.open(path)
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        if mode == "geometry":
+            im = dp.detect_and_warp_document(im)          # perspective warp
+            im = dp.to_grayscale(im)                       # Surya prefers grayscale
+            im = dp.resize_long_side(im)                    # uses config.target_long_side_px
+        else:
+            im = dp.process_image(im, debug_dir=None)      # vendored full pipeline
+        ext = os.path.splitext(path)[1].lower() or ".jpg"
+        tmp = path + ".docprep"
+        if ext in (".png",) or im.mode == "P":
+            im.convert("RGB").save(tmp, "PNG")           # package's save_for_ocr is JPEG-only
+        else:
+            im.save(tmp, "JPEG", quality=95, dpi=(config.dpi, config.dpi))
+        os.replace(tmp, path)
+        return path
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"docprep {mode} failed ({exc}) — keeping original")
+        if os.path.isfile(path + ".docprep"):
+            try:
+                os.remove(path + ".docprep")
+            except OSError:
+                pass
+        return path
+
+
 def preprocess_page(path: str, enhance: bool) -> str:
     """Doc-quality enhancement BEFORE OCR (the OCR engine is untouched). v2.
 
@@ -866,7 +923,8 @@ def refine_text_free_llm(text: str):
     return "\n".join(fixed) if changed else None
 
 
-def run_pipeline(upload_bytes: bytes, filename: str, enhance: bool = True, refine: bool = False) -> dict:
+def run_pipeline(upload_bytes: bytes, filename: str, enhance: bool = True, refine: bool = False,
+                 docprep: str = "") -> dict:
     """Execute the real OCR pipeline for one uploaded document."""
     global _busy
 
@@ -938,6 +996,8 @@ def run_pipeline(upload_bytes: bytes, filename: str, enhance: bool = True, refin
             pages = [page_path]
 
         # ---- optional doc-quality enhancement before OCR -------------------
+        if docprep in ("geometry", "full"):
+            pages = [docprep_page(p, docprep) for p in pages]
         pages = [preprocess_page(p, enhance) for p in pages]
 
         # ---- run the existing pipeline (serialized: --parallel 1) ----------
@@ -1183,7 +1243,10 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(enhance_q)
             enhance = (qs.get("enhance") or ["1"])[0] not in ("0", "false", "off")
             refine = (qs.get("refine") or ["0"])[0] not in ("0", "false", "off")
-            payload = run_pipeline(body, filename, enhance=enhance, refine=refine)
+            docprep = (qs.get("docprep") or [""])[0]
+            if docprep not in ("", "geometry", "full"):
+                docprep = ""
+            payload = run_pipeline(body, filename, enhance=enhance, refine=refine, docprep=docprep)
             self._send_json(200, payload)
 
         except HttpError as err:

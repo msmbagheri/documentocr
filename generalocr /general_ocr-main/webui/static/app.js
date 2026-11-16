@@ -54,6 +54,7 @@
     downloadJson: $("download-json"),
     toast: $("toast"),
     enhanceToggle: $("enhance-toggle"),
+    docprepToggle: $("docprep-toggle"),
     refineToggle: $("refine-toggle"),
     refineWrap: $("refine-wrap"),
     bbControls: $("bb-controls"),
@@ -397,8 +398,9 @@
     const started = performance.now();
     try {
       const enhance = els.enhanceToggle.checked ? "1" : "0";
+      const docprep = (els.docprepToggle && els.docprepToggle.value) || "";
       const refine = els.refineToggle && els.refineToggle.checked ? "1" : "0";
-      const res = await fetch("/api/ocr?enhance=" + enhance + "&refine=" + refine, {
+      const res = await fetch("/api/ocr?enhance=" + enhance + "&refine=" + refine + "&docprep=" + docprep, {
         method: "POST",
         headers: {
           "Content-Type": state.file.type || "application/octet-stream",

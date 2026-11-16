@@ -874,6 +874,19 @@ img, pre, iframe { max-width: 100%; }
   cursor: pointer;
 }
 
+.bb-toggle select {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.bb-toggle select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
 .bb-toggle--lines input { accent-color: var(--ok); }
 
 .bb-swatch {
