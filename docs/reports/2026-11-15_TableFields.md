@@ -436,3 +436,49 @@ git push -u origin main
 ```
 
 ---
+
+## ۰.۱۱ تحقیق پیش‌پردازش تصویر برای Surya (۱۶ نوامبر)
+
+### ۰.۱۱.۱ منابع بررسی‌شده
+
+| منبع | محتوای کلیدی |
+|---|---|
+| `surya/inference/util.py` (کد واقعی v0.23.0) | تابع `scale_to_fit`: max=3072×2048 px, min=1792×28 px, LANCZOS resampling, 28×28 grid-align (ViT token alignment) |
+| `surya/inference/backends/openai_client.py` | تنها preprocessing داخلی Surya = `scale_to_fit(img)` + encode PNG/Base64 → مدل. هیچ contrast/binarize/sharpen داخلی ندارد |
+| `surya/settings.py` | IMAGE_DPI=96 (layout/detection), IMAGE_DPI_HIGHRES=192 (recognition) |
+| GitHub README (datalab-to/surya) | «Preprocessing (binarizing, deskewing) can help with very old/blurry scans» — کلیدواژه **old/blurry** نه همه اسکن‌ها; «decreasing to no more than 2048px width» |
+| Benchmarks olmOCR-bench | OldScan: Surya 2.5 = 44.3% (بسیار ضعیف روی اسکن قدیمی); Persian: 63.8%→67.9% |
+| ocrmypdf discussion #1457 | کاربران Surya + preprocessing می‌گویند binarization همیشه regresses می‌کند |
+
+### ۰.۱۱.۲ آنچه Surya واقعاً می‌خواهد (از کد)
+
+```python
+# inference/util.py:scale_to_fit — تنها preprocessing داخلی Surya
+max_size = (3072, 2048)   # بالاتر → downscaled با LANCZOS
+min_size = (1792, 28)     # پایین‌تر → upscaled با LANCZOS
+grid = 28×28 px blocks    # ViT/VLM token alignment
+resample = LANCZOS         # بالاترین کیفیت
+```
+
+نتیجه: Surya هیچ preprocessing دیگری روی تصویر اعمال نمی‌کند. هر چیزی قبل از ارسال اضافه شود:
+- **Binarize/Adaptive** → ۵/۵ → ۰/۵ (فاجعه، ساختاری)
+- **Contrast+denoise** → ۵/۵ → ۱/۵ (مضر)
+- **Perspective warp** → ۵/۵ → ۵/۵ (بی‌ضرر/مفید برای عکس گوشی کج)
+
+### ۰.۱۱.۳ بهترین راه‌حل (شواهد‌محور)
+
+| اولویت | روش | شواهد | کاربرد |
+|---|---|---|---|
+| **۱ — پیش‌فرض** | بدون هیچ preprocessing | ۵/۵ روی بیمه + کد داخلی | اسکن‌های صاف و عکس‌های عادی |
+| **۲ — opt-in geometry** | Perspective warp + EXIF + DPI resize | ۵/۵ + ۱۲۸char بیشتر; خالی از binarize/contrast | عکس‌های گوشی با زاویه |
+| **۳ — هرگز** | Otsu/Adaptive binarize | ۵/۵ → ۰/۵ + نویز ۵۰۶ | هیچ‌وقت برای Surya |
+| **۴ — هرگز** | Contrast/denoise/sharpen | ۵/۵ → ۱/۵ | هیچ‌وقت برای Surya |
+
+### ۰.۱۱.۴ تصمیم نهایی
+
+- **هیچ preprocessing عمومی** (شامل document-preprocessor full pipeline) برای Surya بهینه نیست چون همه برای Tesseract/ABBYY ساخته شده‌اند
+- **فقط هندسه (geometry)** = همان چیزی که موتور ما واقعاً می‌خواهد: perspective correction برای عکس گوشی + تصحیح DPI (مقدار dpi=300 در پکیج صحیح است)
+- **پیش‌پردازش داخلی v2.2** (`preprocess_page`) = تقریباً بهینه: deskew + illumination normalize گیت‌شده + upscale <1500px → 2× + LANCZOS + grayscale
+- **هیچ‌چیز دیگر اضافه نکنید** — کد Surya خودش scale_to_fit دارد و preprocessing اضافی رگرسیون ایجاد می‌کند
+
+---
