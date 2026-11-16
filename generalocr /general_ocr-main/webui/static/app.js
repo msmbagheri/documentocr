@@ -1470,10 +1470,15 @@
         else showError("تغییر نام ناموفق بود.", "اتصال سرور را بررسی کنید.");
       }
     };
+    // keep every key/click inside the input from reaching the row handlers
+    // (row's Enter/Space keydown triggers open(); a plain click bubbles too)
     input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
       if (e.key === "Enter") { e.preventDefault(); finish(true); }
       else if (e.key === "Escape") { e.preventDefault(); finish(false); }
     });
+    input.addEventListener("click", (e) => e.stopPropagation());
+    input.addEventListener("keyup", (e) => e.stopPropagation());
     input.addEventListener("blur", () => finish(true));
   }
 
@@ -1523,7 +1528,10 @@
         });
       });
 
-      const open = () => loadSaved(item.id);
+      const open = () => {
+      if (row.querySelector(".saved-row__rename-input")) return; // mid-rename
+      loadSaved(item.id);
+    };
       row.addEventListener("click", open);
       row.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }

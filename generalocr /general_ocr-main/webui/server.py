@@ -774,7 +774,7 @@ def delete_saved(save_id: str) -> dict:
     return {"ok": True, "id": save_id}
 
 
-_SAFE_LABEL = re.compile(r"[^0-9A-Za-z\u0600-\u06FF ._،؛():\-]+")
+_SAFE_LABEL = re.compile(r"[^0-9A-Za-z\u0600-\u06FF ._،؛():\u2013\u2014\u0640\-]+")
 _LABEL_MAX_LEN = 100
 
 
