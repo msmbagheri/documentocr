@@ -982,6 +982,19 @@
     bbApplyZoom();
   }
 
+
+  function bbBlockAt(x, y) {
+    if (!Array.isArray(bb.blocks)) return -1;
+    for (let i = 0; i < bb.blocks.length; i++) {
+      const b = bb.blocks[i], [x1, y1, x2, y2] = b.bbox || [];
+      if (![x1, y1, x2, y2].every((v) => typeof v === "number" && isFinite(v))) continue;
+      const l = Math.min(x1, x2), t = Math.min(y1, y2);
+      const r = Math.max(x1, x2), bo = Math.max(y1, y2);
+      if (x >= l && x <= r && y >= t && y <= bo) return i;
+    }
+    return -1;
+  }
+
   function bbDraw() {
     const [ew, eh] = bbEngineSize();
     els.bbSvg.setAttribute("viewBox", `0 0 ${ew} ${eh}`);
@@ -989,7 +1002,7 @@
     const frag = document.createDocumentFragment();
 
     if (bb.showLines && bb.linesAvailable) {
-      bb.lines.forEach((ln) => {
+      bb.lines.forEach((ln, li) => {
         let shape;
         if (ln.polygon && ln.polygon.length >= 3) {
           shape = document.createElementNS(BB_SVG_NS, "polygon");
@@ -1003,6 +1016,15 @@
           shape.setAttribute("width", String(Math.abs(x2 - x1)));
           shape.setAttribute("height", String(Math.abs(y2 - y1)));
           shape.setAttribute("class", "bb-line");
+        }
+        {
+          const [bx1, by1, bx2, by2] = ln.bbox || [];
+          if ([bx1, by1, bx2, by2].every((v) => typeof v === "number" && isFinite(v))) {
+            const cx = (Math.min(bx1, bx2) + Math.max(bx1, bx2)) / 2;
+            const cy = (Math.min(by1, by2) + Math.max(by1, by2)) / 2;
+            const bi = bbBlockAt(cx, cy);
+            if (bi >= 0) shape.dataset.block = String(bi);
+          }
         }
         frag.appendChild(shape);
       });
@@ -1205,6 +1227,10 @@
         wrap.appendChild(more);
       }
       els.bbInfoText.appendChild(wrap);
+    } else if (b.text) {
+      // regular layout block (PageHeader/SectionHeader/Text/…) — show its real text
+      els.bbInfoText.textContent = b.text;
+      els.bbInfoText.setAttribute("dir", "auto");
     } else if (totalF) {
       const more = document.createElement("span");
       more.className = "bb-info__more";
@@ -1246,9 +1272,17 @@
       bbSelectField(Number(field.dataset.block), Number(field.dataset.field));
       return;
     }
-    const shape = e.target.closest(".bb-shape");
+    const shape = e.target.closest(".bb-shape, .bb-line");
     if (shape) {
-      bbSelect(Number(shape.dataset.index));
+      if (shape.classList.contains("bb-line")) {
+        // click on a detection line → select its containing block
+        const bIdx = shape.dataset.block;
+        if (bIdx != null && bIdx !== "") {
+          bbSelect(Number(bIdx));
+        }
+      } else {
+        bbSelect(Number(shape.dataset.index));
+      }
     } else if (e.target === els.bbSvg || e.target === els.bbImg) {
       bbSelect(null);
     }
