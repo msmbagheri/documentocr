@@ -678,7 +678,8 @@ def save_result(payload: dict) -> dict:
 
         meta = {
             "id": save_id,
-            "name": payload.get("file") or "document",
+            "name": (_clean_label(payload.get("file"))
+                     if payload.get("file") else "document"),
             "kind": payload.get("kind") or "image",
             "page_count": payload.get("page_count") or len(clean_pages),
             "elapsed_ms": payload.get("elapsed_ms"),
@@ -771,6 +772,43 @@ def delete_saved(save_id: str) -> dict:
     shutil.rmtree(path, ignore_errors=True)
     logger.info(f"OCR result deleted: id={save_id}")
     return {"ok": True, "id": save_id}
+
+
+_SAFE_LABEL = re.compile(r"[^0-9A-Za-z\u0600-\u06FF ._،؛():\-]+")
+_LABEL_MAX_LEN = 100
+
+
+def _clean_label(raw) -> str:
+    """Sanitize a user-provided display name (no path, no control chars)."""
+    if not isinstance(raw, str):
+        raise HttpError(400, "bad_name", "نام باید یک رشتهٔ متنی باشد.")
+    name = _SAFE_LABEL.sub("_", raw)
+    name = re.sub(r"\s+", " ", name).strip(" ._-")
+    name = name[:_LABEL_MAX_LEN].strip()
+    if not name:
+        raise HttpError(400, "bad_name", "نام نمی‌تواند خالی باشد.",
+                        "یک نام معتبر وارد کنید.")
+    return name
+
+
+def rename_saved(save_id: str, new_name) -> dict:
+    """Change the display name of a saved result (meta.json rewrite, atomic)."""
+    meta = _load_meta(save_id)  # 404 if missing; also validates the id
+    old_name = meta.get("name")
+    meta["name"] = _clean_label(new_name)
+    meta_path = os.path.join(_save_dir(save_id), "meta.json")
+    tmp_path = meta_path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False)
+        os.replace(tmp_path, meta_path)  # atomic publish
+    except Exception as exc:  # noqa: BLE001
+        if os.path.isfile(tmp_path):
+            os.remove(tmp_path)
+        logger.error(f"rename_saved failed: {exc}\n{traceback.format_exc()}")
+        raise HttpError(500, "rename_failed", "تغییر نام ناموفق بود.") from exc
+    logger.info(f"OCR result renamed: id={save_id} {old_name!r} -> {meta['name']!r}")
+    return {"ok": True, "id": save_id, "name": meta["name"]}
 
 
 _DIGIT_RUN = re.compile(r"[0-9۰-۹][0-9۰-۹.,/\-]*")
@@ -1178,6 +1216,31 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(err.status, {"ok": False, "code": err.code, "message": err.message, "hint": err.hint})
         except Exception as exc:  # noqa: BLE001
             logger.error(f"DELETE {path} failed: {exc}\n{traceback.format_exc()}")
+            self._send_json(500, {"ok": False, "code": "server_error", "message": "خطای داخلی سرور."})
+
+    def do_PATCH(self):
+        path = urlparse(self.path).path
+        try:
+            if path.startswith("/api/saved/"):
+                length = int(self.headers.get("Content-Length") or 0)
+                if length <= 0:
+                    raise HttpError(400, "empty_body", "داده‌ای ارسال نشده است.")
+                if length > 64 * 1024:
+                    raise HttpError(413, "too_large", "بدنهٔ درخواست بیش از حد بزرگ است.")
+                body = self.rfile.read(length)
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except Exception:  # noqa: BLE001
+                    raise HttpError(400, "bad_json", "بدنهٔ درخواست JSON معتبر نیست.")
+                if not isinstance(payload, dict) or "name" not in payload:
+                    raise HttpError(400, "bad_payload", "فیلد «name» الزامی است.")
+                self._send_json(200, rename_saved(path[len("/api/saved/"):], payload["name"]))
+            else:
+                self._send_json(404, {"ok": False, "code": "not_found", "message": "مسیر یافت نشد."})
+        except HttpError as err:
+            self._send_json(err.status, {"ok": False, "code": err.code, "message": err.message, "hint": err.hint})
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"PATCH {path} failed: {exc}\n{traceback.format_exc()}")
             self._send_json(500, {"ok": False, "code": "server_error", "message": "خطای داخلی سرور."})
 
 

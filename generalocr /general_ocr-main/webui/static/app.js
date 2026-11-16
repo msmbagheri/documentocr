@@ -83,6 +83,7 @@
     bbInfoBbox: $("bb-info-bbox"),
     bbList: $("bb-list"),
     saveResult: $("save-result"),
+    saveNameInput: $("save-name-input"),
     savedList: $("saved-list"),
     savedCount: $("saved-count"),
     savedEmpty: $("saved-empty"),
@@ -441,6 +442,10 @@
 
   function renderResult(data, clientMs) {
     els.result.hidden = false;
+    if (els.saveNameInput) {
+      els.saveNameInput.value = data.file || "";
+      els.saveNameInput.style.display = "block";
+    }
 
     const pages = data.pages || [];
     const page = pages[state.pageIndex] || pages[0];
@@ -1367,7 +1372,7 @@
     if (!data) return null;
     const payload = {
       ok: true,
-      file: data.file,
+      file: (els.saveNameInput && els.saveNameInput.value.trim()) || data.file,
       kind: data.kind,
       page_count: data.page_count,
       elapsed_ms: data.elapsed_ms,
@@ -1419,6 +1424,59 @@
     }
   }
 
+  async function startRename(row, id, currentName, onDone) {
+    const nameSpan = row.querySelector(".saved-row__name");
+    if (!nameSpan || row.querySelector(".saved-row__rename-input")) return;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "saved-row__rename-input";
+    input.maxLength = 100;
+    input.dir = "auto";
+    input.value = currentName || "";
+    nameSpan.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      const val = input.value.trim();
+      const span = document.createElement("span");
+      span.className = "saved-row__name";
+      span.setAttribute("dir", "auto");
+      input.replaceWith(span);
+      if (!save || !val || val === (currentName || "")) {
+        span.textContent = currentName || "document";
+        return;
+      }
+      span.textContent = "...";
+      try {
+        const res = await fetch(`/api/saved/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({ name: val }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data || !data.ok) {
+          throw { message: (data && data.message) || "تغییر نام ناموفق بود." };
+        }
+        span.textContent = data.name;
+        if (onDone) onDone(data.name);
+        toast(`نام به «${data.name}» تغییر کرد.`);
+      } catch (err) {
+        span.textContent = currentName || "document";
+        if (err && err.message) showError(err.message, err.hint || "");
+        else showError("تغییر نام ناموفق بود.", "اتصال سرور را بررسی کنید.");
+      }
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener("blur", () => finish(true));
+  }
+
   function renderSavedList(items) {
     els.savedList.innerHTML = "";
     els.savedCount.textContent = faNum(items.length);
@@ -1451,6 +1509,20 @@
       del.title = "حذف";
       del.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg>';
 
+      const rename = document.createElement("button");
+      rename.type = "button";
+      rename.className = "icon-btn icon-btn--sm saved-row__rename";
+      rename.setAttribute("aria-label", `تغییر نام ${item.name || "نتیجهٔ ذخیره‌شده"}`);
+      rename.title = "تغییر نام";
+      rename.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg>';
+      rename.addEventListener("click", (e) => {
+        e.stopPropagation();
+        startRename(row, item.id, item.name, (newName) => {
+          const nameSpan = row.querySelector(".saved-row__name");
+          if (nameSpan) nameSpan.textContent = newName;
+        });
+      });
+
       const open = () => loadSaved(item.id);
       row.addEventListener("click", open);
       row.addEventListener("keydown", (e) => {
@@ -1462,6 +1534,7 @@
       });
 
       row.appendChild(body);
+      row.appendChild(rename);
       row.appendChild(del);
       els.savedList.appendChild(row);
     });
