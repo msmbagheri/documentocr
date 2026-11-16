@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import io
+import difflib
 import json
 import mimetypes
 import os
@@ -772,7 +773,62 @@ def delete_saved(save_id: str) -> dict:
     return {"ok": True, "id": save_id}
 
 
-def run_pipeline(upload_bytes: bytes, filename: str, enhance: bool = True) -> dict:
+_DIGIT_RUN = re.compile(r"[0-9۰-۹][0-9۰-۹.,/\-]*")
+_REFINE_MODEL = os.environ.get("OCR_REFINE_MODEL", "baidu/ernie-5.5-flash-preview:free")
+_REFINE_SYS = (
+    "تو اصلاح‌کنندهٔ متن چاپی فارسی هستی که از OCR پرشده است. "
+    "فقط اشتباهات واضح تشخیص حروف (مثل شباهت حروف) را اصلاح کن. "
+    "اعداد، ارقام، نشانه‌ها، فرمت‌ها و ترتیب خطوط را دست نزن. "
+    "اگر خطی درست است عیناً برگردان. خروجی: فقط همان خطوط اصلاح‌شده، هر خط در یک سطر."
+)
+
+
+def refine_text_free_llm(text: str):
+    """EXPERIMENTAL opt-in: post-OCR Persian char-error correction via a FREE
+    OpenRouter model. Hard safety rails (verified in A/B, 2026-11-16):
+      1. every digit run of every output line must EXACTLY equal the source
+         line's runs (no numeric invention - dates/amounts are untouchable),
+      2. line-level similarity >= 0.5 vs source (rejects rewritten lines),
+      3. per-line acceptance: a failed guard keeps the ORIGINAL line.
+    Returns the corrected text, or None when disabled/unavailable/no change.
+    """
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not key or not text.strip():
+        return None
+    lines = [l for l in text.splitlines() if l.strip()]
+    body = {
+        "model": _REFINE_MODEL,
+        "messages": [{"role": "system", "content": _REFINE_SYS},
+                     {"role": "user",
+                      "content": "خطوط:\n" + "\n".join(f"{i + 1}. {l}" for i, l in enumerate(lines))}],
+        "temperature": 0.0,
+    }
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            out = json.load(r)["choices"][0]["message"]["content"]
+    except Exception as exc:  # noqa: BLE001 - free tier may 429/timeout: stay safe
+        logger.warning(f"refine skipped: {exc}")
+        return None
+    out_lines = [re.sub(r"^\d+[\.\):]\s*", "", l.strip()) for l in out.splitlines() if l.strip()]
+    if len(out_lines) != len(lines):
+        logger.warning("refine skipped: line count changed")
+        return None
+    fixed, changed = [], False
+    for src, cand in zip(lines, out_lines):
+        ok = (_DIGIT_RUN.findall(src) == _DIGIT_RUN.findall(cand)
+              and difflib.SequenceMatcher(None, src, cand).ratio() >= 0.5)
+        if ok and cand != src:
+            changed = True
+        fixed.append(cand if ok else src)
+    return "\n".join(fixed) if changed else None
+
+
+def run_pipeline(upload_bytes: bytes, filename: str, enhance: bool = True, refine: bool = False) -> dict:
     """Execute the real OCR pipeline for one uploaded document."""
     global _busy
 
@@ -873,6 +929,10 @@ def run_pipeline(upload_bytes: bytes, filename: str, enhance: bool = True) -> di
             with open(ocr_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
             text = (payload.get("text") or "").strip()
+            if refine:
+                refined = refine_text_free_llm(text)
+                if refined is not None:
+                    text = refined
             entry = {
                 "page": index,
                 "text": text,
@@ -1082,8 +1142,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise HttpError(400, "truncated_body", "فایل به‌طور کامل دریافت نشد.")
 
             enhance_q = (urlsplit(self.path).query or "")
-            enhance = (parse_qs(enhance_q).get("enhance") or ["1"])[0] not in ("0", "false", "off")
-            payload = run_pipeline(body, filename, enhance=enhance)
+            qs = parse_qs(enhance_q)
+            enhance = (qs.get("enhance") or ["1"])[0] not in ("0", "false", "off")
+            refine = (qs.get("refine") or ["0"])[0] not in ("0", "false", "off")
+            payload = run_pipeline(body, filename, enhance=enhance, refine=refine)
             self._send_json(200, payload)
 
         except HttpError as err:
