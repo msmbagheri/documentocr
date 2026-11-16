@@ -627,22 +627,320 @@ def extract_table_fields(block: dict, det_lines: list) -> list:
     return fields
 
 
+
+
+def extract_text_kv_fields(block: dict, det_lines: list,
+                          pending_key=None, pending_line=None,
+                          pending_conf=None) -> tuple:
+    """Colon-pattern fields from a non-Table text block + cross-block pairing.
+
+    pending_key/pending_line/pending_conf come from the previous block's
+    dangling key (line ending with ":").  When a bare line appears first in
+    this block, it completes that pending key before becoming a bare field.
+
+    Returns (fields, new_pending_key, new_pending_line, new_pending_conf).
+    """
+    label = block.get("label") or ""
+    if label in ("Table", "Picture"):
+        return [], None, None, None
+
+    text = (block.get("text") or "").strip()
+    if not text:
+        return []
+
+    bbox = block.get("bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return []
+    try:
+        tb = [float(v) for v in bbox]
+    except (TypeError, ValueError):
+        return []
+
+    # split block text into visual lines (newline-separated)
+    raw_lines = re.split(r"[\n\r]+", text)
+    tl = [l.strip() for l in raw_lines if l.strip()]
+    if not tl:
+        return [], pending_key, pending_line, pending_conf
+
+    # collect detection lines inside this block, sorted top-to-bottom
+    block_lines = []
+    for ln in det_lines or []:
+        lb = ln.get("bbox") if isinstance(ln, dict) else None
+        if not lb or len(lb) != 4:
+            continue
+        try:
+            lb = [float(v) for v in lb]
+        except (TypeError, ValueError):
+            continue
+        if _line_inside(lb, tb):
+            block_lines.append(lb)
+    block_lines.sort(key=lambda b: (b[1] + b[3]) / 2)
+
+    # proportional mapping: text line i -> nearest detection line
+    n, m = len(tl), len(block_lines)
+    line_of = [None] * n
+    if m:
+        span = (tb[3] - tb[1]) or 1.0
+        for i in range(n):
+            cy = tb[1] + (i + 0.5) / n * span
+            best, bd = None, float("inf")
+            for lb in block_lines:
+                d = abs((lb[1] + lb[3]) / 2 - cy)
+                if d < bd:
+                    best, bd = lb, d
+            line_of[i] = best
+
+    conf = block.get("confidence")
+    try:
+        conf = float(conf) if conf is not None else None
+    except (TypeError, ValueError):
+        conf = None
+
+    def line_union(boxes):
+        boxes = [b for b in boxes if b]
+        if not boxes:
+            return None
+        return [min(b[0] for b in boxes), min(b[1] for b in boxes),
+                max(b[2] for b in boxes), max(b[3] for b in boxes)]
+
+    def make_field(key, value, key_line, value_line):
+        boxes = [b for b in (key_line, value_line) if b]
+        return {
+            "key": key, "value": value,
+            "bbox": line_union(boxes),
+            "key_bbox": key_line[:] if key_line else None,
+            "value_bbox": value_line[:] if value_line else None,
+            "confidence": conf,
+            "bbox_status": "line" if boxes else "none",
+        }
+
+    fields = []
+    # pending is a field-dict awaiting its value; None means no dangling key
+    pending = None
+
+    def _labelish(t: str) -> bool:
+        """True if a bare line looks like a form label (not pure digits, short, has letters)."""
+        if not t:
+            return False
+        # exclude pure-digit strings like "۳۷۵"
+        if re.fullmatch(r"[۰-۹٠-٩0-9]+\s*", t.strip()):
+            return False
+        letter_cnt = sum(1 for ch in t if ch.isalpha() or "\u0600" <= ch <= "\u06FF" or "\u0750" <= ch <= "\u077F")
+        if letter_cnt == 0:
+            return False
+        # short enough to be a label (not a sentence)
+        if len(t) > 30:
+            return False
+        return True
+
+    for i, t in enumerate(tl):
+        line = line_of[i]
+        key, value = _split_kv(t)        # colon-split: ("نام", "علی") or (None, None)
+
+        if key is not None:               # "نام: علی" → direct field
+            # any older pending stays in its owner block (already there); abandon it
+            fields.append(make_field(key, value, line, line if value else None))
+            # colon line with empty value becomes the new pending for next block
+            pending = fields[-1] if not value else None
+            continue
+
+        # bare line (no colon)
+        if pending is not None:
+            # complete the pending key-value pair from the previous block
+            pending["value"] = t
+            pending["value_bbox"] = line[:] if line else None
+            pending["bbox"] = line_union([pending.get("bbox"), line]) if line else pending.get("bbox")
+            pending = None
+            continue
+
+        # no pending: decide if this bare line becomes a NEW pending key
+        if _labelish(t) and label != "PageHeader":
+            # create a pending field (value empty) that the next block will complete
+            f = make_field(t, "", line, None)
+            fields.append(f)
+            pending = f
+        # else: orphan bare line (long prose, pure digits, etc.) → dropped silently
+
+    # After loop: pending carries to the next block (returned as new_pending).
+    # Do NOT flush as a completed field — that would duplicate across blocks.
+    return fields, pending_key, pending_line, pending_conf
+
+
+def _labelish(text: str) -> bool:
+    """True if text looks like a form-field label (not a paragraph/number)."""
+    if not text:
+        return False
+    # Must have letters (Persian or Latin), be short, not be pure digits
+    has_letter = bool(re.search(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFFA-Za-z]", text))
+    short = len(text.strip()) <= 25
+    not_number = not re.fullmatch(r"[\d\s.,%+\-]+", text.strip())
+    return has_letter and short and not_number
+
+
+def extract_text_kv_fields(block: dict, det_lines: list,
+                          pending_field=None, pending_conf=None) -> tuple:
+    """Colon-pattern + cross-block pairing for non-Table text blocks.
+
+    pending_field comes from the PREVIOUS block — a field dict with key set
+    and value="" awaiting its value.  When a bare line appears first in this
+    block, it completes that pending_field before becoming a bare field.
+
+    PageHeader blocks never CREATE a pending field (they're titles, not keys).
+    Orphan bare values (no pending, not labelish) are silently DROPPED.
+
+    Returns (fields_owned_by_this_block, new_pending_field, pending_conf).
+    """
+    label = block.get("label") or ""
+    if label in ("Table", "Picture"):
+        return [], None, None
+
+    text = (block.get("text") or "").strip()
+    if not text:
+        return [], pending_field, pending_conf
+
+    bbox = block.get("bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return [], pending_field, pending_conf
+    try:
+        tb = [float(v) for v in bbox]
+    except (TypeError, ValueError):
+        return [], pending_field, pending_conf
+
+    tl = [l.strip() for l in re.split(r"[\n\r]+", text) if l.strip()]
+    if not tl:
+        return [], pending_field, pending_conf
+
+    # real detection lines inside this block, sorted top-to-bottom
+    block_lines = []
+    for ln in det_lines or []:
+        lb = ln.get("bbox") if isinstance(ln, dict) else None
+        if not lb or len(lb) != 4:
+            continue
+        try:
+            lb = [float(v) for v in lb]
+        except (TypeError, ValueError):
+            continue
+        if _line_inside(lb, tb):
+            block_lines.append(lb)
+    block_lines.sort(key=lambda b: (b[1] + b[3]) / 2)
+
+    n, m = len(tl), len(block_lines)
+    line_of = [None] * n
+    if m:
+        span = (tb[3] - tb[1]) or 1.0
+        for i in range(n):
+            cy = tb[1] + (i + 0.5) / n * span
+            best, bd = None, float("inf")
+            for lb in block_lines:
+                d = abs((lb[1] + lb[3]) / 2 - cy)
+                if d < bd:
+                    best, bd = lb, d
+            line_of[i] = best
+
+    conf = block.get("confidence")
+    try:
+        conf = float(conf) if conf is not None else pending_conf
+    except (TypeError, ValueError):
+        conf = pending_conf
+
+    def line_union(boxes):
+        boxes = [b for b in boxes if b]
+        if not boxes:
+            return None
+        return [min(b[0] for b in boxes), min(b[1] for b in boxes),
+                max(b[2] for b in boxes), max(b[3] for b in boxes)]
+
+    def make_field(key, value, key_line, value_line):
+        boxes = [b for b in (key_line, value_line) if b]
+        return {
+            "key": key, "value": value,
+            "bbox": line_union(boxes),
+            "key_bbox": key_line[:] if key_line else None,
+            "value_bbox": value_line[:] if value_line else None,
+            "confidence": conf,
+            "bbox_status": "line" if boxes else "none",
+        }
+
+    fields = []     # fields owned by THIS block
+
+    for i, t in enumerate(tl):
+        line = line_of[i]
+        key, value = _split_kv(t)   # ("نام","علی") or (None,None)
+
+        if key is not None:
+            # ── colon line ──
+            if pending_field is not None:
+                # previous pending has no value → stay incomplete in JSON
+                pending_field = None   # abandon (stays in owner block, hidden UI)
+            if value:
+                fields.append(make_field(key, value, line, line))
+            else:
+                f = make_field(key, "", line, None)
+                fields.append(f)
+                pending_field = f        # carry to next block
+        else:
+            # ── bare line ──
+            if pending_field is not None:
+                # complete the pending pair
+                pending_field["value"] = t
+                pending_field["value_bbox"] = line[:] if line else None
+                pending_field["bbox"] = line_union(
+                    [pending_field.get("bbox"), line] if line else [pending_field.get("bbox")])
+                pending_field = None
+            elif _labelish(t) and label != "PageHeader":
+                # label-like line starts a new pending field
+                f = make_field(t, "", line, None)
+                fields.append(f)
+                pending_field = f
+            # else: orphan bare line — silently dropped
+
+    # DO NOT flush pending at block end; return it for next block to carry
+    return fields, pending_field, conf
+
+
 def inject_table_fields(payload: dict, layers: dict) -> int:
-    """Add 'fields' to every Table block of a page payload (incremental)."""
+    """Add fields to every Table AND Text/SectionHeader/PageHeader block.
+
+    Table blocks  -> extract_table_fields  (HTML cell structure)
+    Text blocks   -> extract_text_kv_fields (line-level Key: Value)
+                      + cross-block pairing: a pending field dict (key set,
+                        value="") from block N pairs with the first bare line
+                        of block N+1.  Orphan bare values are DROPPED.
+                        PageHeader never creates pending keys (they're titles).
+    Other labels  -> skipped (Picture, etc.)
+    """
     if not isinstance(payload, dict):
         return 0
     lines = (layers or {}).get("lines") or []
+    lines_ok = bool((layers or {}).get("available"))
+    det = lines if lines_ok else []
+
+    pending_field, pending_conf = None, None   # cross-block pending state
+
     added = 0
-    for block in payload.get("blocks") or []:
-        if block.get("label") != "Table":
-            continue
-        if "<table" not in (block.get("html") or "").lower():
-            continue
-        fields = extract_table_fields(block, lines if (layers or {}).get("available") else [])
-        if fields:
-            block["fields"] = fields
-            block["fields_count"] = len(fields)
-            added += len(fields)
+    for block in (payload.get("blocks") or []):
+        label = block.get("label") or ""
+        if label == "Table":
+            pending_field, pending_conf = None, None
+            if "<table" in (block.get("html") or "").lower():
+                fields = extract_table_fields(block, det)
+                if fields:
+                    block["fields"] = fields
+                    block["fields_count"] = len(fields)
+                    added += len(fields)
+        elif label in ("Text", "SectionHeader", "PageHeader"):
+            fields, pending_field, pending_conf = extract_text_kv_fields(
+                block, det,
+                pending_field=pending_field,
+                pending_conf=pending_conf,
+            )
+            if fields:
+                block["fields"] = fields       # REPLACE (idempotent on re-inject)
+                block["fields_count"] = len(fields)
+                added += len(fields)
+            elif "fields" in block:
+                del block["fields"]
+                block["fields_count"] = 0
     return added
 
 
