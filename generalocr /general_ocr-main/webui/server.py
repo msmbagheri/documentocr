@@ -772,7 +772,7 @@ def _labelish(text: str) -> bool:
         return False
     # Must have letters (Persian or Latin), be short, not be pure digits
     has_letter = bool(re.search(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFFA-Za-z]", text))
-    short = len(text.strip()) <= 25
+    short = len(text.strip()) <= 20
     not_number = not re.fullmatch(r"[\d\s.,%+\-]+", text.strip())
     return has_letter and short and not_number
 
