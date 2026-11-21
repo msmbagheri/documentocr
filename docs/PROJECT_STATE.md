@@ -6,7 +6,7 @@
 > `Verified against commit`.
 
 Last updated: 2026-11-21
-Verified against commit: 250074b
+Verified against commit: ef6d8a5
 
 ## Objective
 
@@ -93,9 +93,12 @@ audit self-test `python3 tools/test_drift_audit.py`.
 
 None — reliability protocol installation completed 2026-11-21
 (see `docs/reports/2026-11-21_ReliabilityProtocol.md`).
+Verification: audit self-test 16/16 PASS (executed); post-install drift audit
+clean (0 BLOCK / 0 WARN, exit 0, executed at commit `ef6d8a5`).
 
 ## Recommended next step
 
 Owner reviews the protocol report; optional follow-ups: wire `tools/drift_audit.py`
-into a pre-commit hook or CI, and review remaining global OpenCode skills for
-cross-project contamination.
+into a pre-commit hook or CI, review remaining global OpenCode skills for
+cross-project contamination, and re-run the E2E OCR suite (`./run_ui.sh`) to
+record a fresh test baseline.
