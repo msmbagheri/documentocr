@@ -1,5 +1,14 @@
 # konkoor_synth
 
+> **Repository orientation** *(added 2026-11-21)* — this repo hosts two related efforts:
+>
+> 1. **konkoor_synth** (described below) — Persian Konkoor exam-page synthesis + OCR evaluation harness (root: `gen.py`, `evaluation/`, `output_konkour/`). Mostly dormant.
+> 2. **DocumentOCR** *(ACTIVE)* — local Persian document OCR pipeline + web UI in [`generalocr /general_ocr-main/`](./generalocr%20/general_ocr-main/) (Surya 2.5 via llama.cpp; `./run_ui.sh` → http://127.0.0.1:8501; reports in `docs/reports/`).
+>
+> **AI agents:** start with [`AGENTS.md`](AGENTS.md) → [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md) → [`docs/DECISIONS.md`](docs/DECISIONS.md), and run `python3 tools/drift_audit.py` at task start and closeout.
+>
+> <!-- reliability:orientation -->
+
 This repository is created to synthisize Konkoor style pages:
 
 ![A Synthisized Sample](assets/photo_2025-06-07_09-06-53.jpg)
