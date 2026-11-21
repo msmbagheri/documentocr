@@ -89,6 +89,12 @@ push requires owner approval (D-010).
 See AGENTS.md §8 (commands). Engine `./run_ui.sh`; audit `python3 tools/drift_audit.py`;
 audit self-test `python3 tools/test_drift_audit.py`.
 
+**Push (VERIFIED 2026-11-21):** plain SSH (port 22) to GitHub hangs on upload in this
+network (reads succeed; `ssh -T` flaky). Working one-off override:
+`GIT_SSH_COMMAND="ssh -o HostName=ssh.github.com -o Port=443" git push origin main`
+(SSH-over-443 authenticated and pushed instantly). Pushed `ef6d8a5` + `fb0cc99` to
+origin with explicit owner authorization.
+
 ## Current task
 
 None — reliability protocol installation completed 2026-11-21
